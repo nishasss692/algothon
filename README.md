@@ -1,4 +1,4 @@
-# Algothon — Real-Time Collaborative Workspace
+# SyncForge — Real-Time Collaborative Workspace
 
 [![Next.js](https://img.shields.io/badge/Next.js-16.3.8-black?style=flat&logo=next.js)](https://nextjs.org/)
 [![React](https://img.shields.io/badge/React-19.2.8-blue?style=flat&logo=react)](https://react.dev/)
