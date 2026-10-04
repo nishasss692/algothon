@@ -12,29 +12,51 @@ export function useMe(): { me: Profile | null; loading: boolean } {
 
   useEffect(() => {
     if (sessionLoading) return;
-    if (!session) {
-      setMe(null);
-      setProfileLoading(false);
-      return;
-    }
 
-    async function fetchProfile(retried = false) {
+    let mounted = true;
+
+    async function load() {
+      if (!session) {
+        if (mounted) {
+          setMe(null);
+          setProfileLoading(false);
+        }
+        return;
+      }
+
       const { data } = await supabase
         .from('profiles')
         .select('id, name, color')
-        .eq('id', session!.user.id)
+        .eq('id', session.user.id)
         .single();
 
-      if (!data && !retried) {
-        // Signup trigger may still be running
-        setTimeout(() => fetchProfile(true), 500);
+      if (!data) {
+        setTimeout(async () => {
+          if (!mounted) return;
+          const retry = await supabase
+            .from('profiles')
+            .select('id, name, color')
+            .eq('id', session.user.id)
+            .single();
+          if (mounted) {
+            setMe(retry.data ?? null);
+            setProfileLoading(false);
+          }
+        }, 500);
         return;
       }
-      setMe(data ?? null);
-      setProfileLoading(false);
+
+      if (mounted) {
+        setMe(data);
+        setProfileLoading(false);
+      }
     }
 
-    fetchProfile();
+    void load();
+
+    return () => {
+      mounted = false;
+    };
   }, [session, sessionLoading]);
 
   return { me, loading: sessionLoading || profileLoading };

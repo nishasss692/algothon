@@ -65,7 +65,7 @@ export async function downloadTaskFile(
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-  } catch (err: any) {
-    toast.error(err?.message || 'Failed to download file');
+  } catch (err: unknown) {
+    toast.error(err instanceof Error ? err.message : 'Failed to download file');
   }
 }

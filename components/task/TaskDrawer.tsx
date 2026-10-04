@@ -413,47 +413,52 @@ function TaskDrawerContent({ task, projectId, onClose }: TaskDrawerContentProps)
                         <span className="font-semibold text-slate-800 mr-1">
                           {actor?.name || 'Collaborator'}
                         </span>
-                        <span>
-                          {item.type === 'task_created' && 'created this task'}
-                          {item.type === 'status_changed' &&
-                            `changed status to ${(item.payload as any)?.to || 'new'}`}
-                          {item.type === 'assignee_changed' && 'reassigned task'}
-                          {item.type === 'due_changed' && 'updated due date'}
-                          {item.type === 'comment_added' && 'commented'}
-                          {item.type === 'file_added' && 'attached a file'}
-                        </span>
-                        <div className="text-[9px] text-slate-400 font-mono mt-0.5">
-                          {dateStr}
-                        </div>
+                        {(() => {
+                          const p = item.payload as Record<string, unknown>;
+                          const toStatus = typeof p?.to === 'string' ? p.to : 'new';
+                          const body = typeof p?.body === 'string' ? p.body : '';
+                          const fileName = typeof p?.file_name === 'string' ? p.file_name : 'download';
+                          const filePath = typeof p?.path === 'string' ? p.path : '';
+                          const size = typeof p?.size === 'number' ? p.size : 0;
 
-                        {item.type === 'comment_added' && (
-                          <div className="mt-1.5 rounded-md bg-white border border-slate-200 p-2 text-xs text-slate-800 whitespace-pre-wrap leading-relaxed shadow-2xs">
-                            {(item.payload as any)?.body}
-                          </div>
-                        )}
+                          return (
+                            <>
+                              <span>
+                                {item.type === 'task_created' && 'created this task'}
+                                {item.type === 'status_changed' && `changed status to ${toStatus}`}
+                                {item.type === 'assignee_changed' && 'reassigned task'}
+                                {item.type === 'due_changed' && 'updated due date'}
+                                {item.type === 'comment_added' && 'commented'}
+                                {item.type === 'file_added' && 'attached a file'}
+                              </span>
+                              <div className="text-[9px] text-slate-400 font-mono mt-0.5">
+                                {dateStr}
+                              </div>
 
-                        {item.type === 'file_added' && (
-                          <div className="mt-1.5 flex items-center justify-between rounded-md bg-white border border-slate-200 px-2.5 py-1.5 text-xs shadow-2xs">
-                            <span className="truncate max-w-[180px] font-medium text-slate-700">
-                              📎 {(item.payload as any)?.file_name}
-                              {(item.payload as any)?.size
-                                ? ` (${formatBytes((item.payload as any).size)})`
-                                : ''}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                downloadTaskFile(
-                                  (item.payload as any)?.path,
-                                  (item.payload as any)?.file_name || 'download'
-                                )
-                              }
-                              className="text-[11px] font-semibold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
-                            >
-                              Download
-                            </button>
-                          </div>
-                        )}
+                              {item.type === 'comment_added' && (
+                                <div className="mt-1.5 rounded-md bg-white border border-slate-200 p-2 text-xs text-slate-800 whitespace-pre-wrap leading-relaxed shadow-2xs">
+                                  {body}
+                                </div>
+                              )}
+
+                              {item.type === 'file_added' && (
+                                <div className="mt-1.5 flex items-center justify-between rounded-md bg-white border border-slate-200 px-2.5 py-1.5 text-xs shadow-2xs">
+                                  <span className="truncate max-w-[180px] font-medium text-slate-700">
+                                    📎 {fileName}
+                                    {size ? ` (${formatBytes(size)})` : ''}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => downloadTaskFile(filePath, fileName)}
+                                    className="text-[11px] font-semibold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                                  >
+                                    Download
+                                  </button>
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
                   );

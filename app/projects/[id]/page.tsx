@@ -40,12 +40,6 @@ export default function ProjectBoardPage() {
   const [accessError, setAccessError] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(taskQuery || null);
-
-  useEffect(() => {
-    if (taskQuery) {
-      setSelectedTaskId(taskQuery);
-    }
-  }, [taskQuery]);
   const [searchQuery, setSearchQuery] = useState('');
   const [boardFilter, setBoardFilter] = useState<BoardFilter>('all');
   const [navView, setNavView] = useState<NavView>('board');
@@ -794,19 +788,19 @@ export default function ProjectBoardPage() {
                           </div>
                           <p className="mt-1 text-slate-700 text-xs leading-relaxed">
                             {act.type === 'task_created' && (
-                              <span>Created new task: <strong>{(act.payload as any)?.title || 'Untitled'}</strong></span>
+                              <span>Created new task: <strong>{String((act.payload as Record<string, unknown>)?.title || 'Untitled')}</strong></span>
                             )}
                             {act.type === 'status_changed' && (
                               <span>
-                                Changed status from <code className="bg-slate-200 px-1.5 py-0.5 rounded text-xs">{(act.payload as any)?.from}</code> to <code className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-xs font-semibold">{(act.payload as any)?.to}</code>
+                                Changed status from <code className="bg-slate-200 px-1.5 py-0.5 rounded text-xs">{String((act.payload as Record<string, unknown>)?.from || '')}</code> to <code className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-xs font-semibold">{String((act.payload as Record<string, unknown>)?.to || '')}</code>
                               </span>
                             )}
                             {act.type === 'assignee_changed' && <span>Reassigned task to collaborator</span>}
                             {act.type === 'due_changed' && (
-                              <span>Updated deadline to {(act.payload as any)?.to || 'none'}</span>
+                              <span>Updated deadline to {String((act.payload as Record<string, unknown>)?.to || 'none')}</span>
                             )}
                             {act.type === 'comment_added' && (
-                              <span>Posted comment: &ldquo;{(act.payload as any)?.body}&rdquo;</span>
+                              <span>Posted comment: &ldquo;{String((act.payload as Record<string, unknown>)?.body || '')}&rdquo;</span>
                             )}
                           </p>
                           {act.task_id && (
@@ -1100,7 +1094,11 @@ export default function ProjectBoardPage() {
                 </label>
                 <select
                   value={newTaskStatus}
-                  onChange={(e) => setNewTaskStatus(e.target.value as any)}
+                  onChange={(e) =>
+                    setNewTaskStatus(
+                      e.target.value as 'todo' | 'in_progress' | 'review' | 'done'
+                    )
+                  }
                   className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-xs focus:border-blue-500 outline-none"
                 >
                   <option value="todo">Backlog / To Do</option>

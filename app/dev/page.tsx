@@ -1,9 +1,8 @@
 // TEMP DEV HARNESS, delete before deploy
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import type { RealtimeChannel } from '@supabase/supabase-js';
 import { useProjectStore } from '@/lib/store';
 import TaskDrawer from '@/components/task/TaskDrawer';
 import type { Profile, Task, Activity } from '@/lib/types';
@@ -101,7 +100,6 @@ const mockActivity: Activity[] = [
 export default function DevPage() {
   const [drawerOpen, setDrawerOpen] = useState(true);
   const conn = useProjectStore((s) => s.conn);
-  const channelRef = useRef<RealtimeChannel | undefined>(undefined);
 
   useEffect(() => {
     useProjectStore.setState({
@@ -303,7 +301,7 @@ export default function DevPage() {
               <strong>File Attachments:</strong> Drag & drop any file onto the drawer to test the drop zone overlay.
             </li>
             <li>
-              <strong>Offline Mode:</strong> Click "Status: LIVE" to toggle to Reconnecting and watch the yellow banner appear while inputs disable.
+              <strong>Offline Mode:</strong> Click &quot;Status: LIVE&quot; to toggle to Reconnecting and watch the yellow banner appear while inputs disable.
             </li>
           </ul>
         </div>

@@ -35,8 +35,8 @@ const AttachButton = forwardRef<AttachButtonHandle, AttachButtonProps>(
 
         try {
           await uploadTaskFile(file, projectId, taskId);
-        } catch (err: any) {
-          toast.error(err?.message || `Failed to upload ${file.name}`);
+        } catch (err: unknown) {
+          toast.error(err instanceof Error ? err.message : `Failed to upload ${file.name}`);
         } finally {
           setUploading((prev) => {
             const next = prev.filter((name) => name !== file.name);

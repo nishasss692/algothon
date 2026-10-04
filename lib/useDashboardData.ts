@@ -43,8 +43,8 @@ export function useDashboardData() {
       }
       setProfiles(profileMap);
       setLoading(false);
-    } catch (err: any) {
-      setError(err?.message || 'Failed to load dashboard data');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
       setLoading(false);
     }
   }, []);
@@ -52,7 +52,8 @@ export function useDashboardData() {
   useEffect(() => {
     if (!userId) return;
 
-    fetchData();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchData();
 
     const channel = supabase.channel(`dashboard:${userId}`);
 
@@ -60,7 +61,7 @@ export function useDashboardData() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'tasks' },
-        (payload: any) => {
+        (payload) => {
           if (payload.eventType === 'DELETE') {
             const oldId = payload.old?.id;
             if (oldId) {

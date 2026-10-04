@@ -4,10 +4,10 @@ import { useProjectStore } from '@/lib/store';
 
 interface TypingIndicatorProps {
   taskId: string;
-  meId: string;
+  meId?: string;
 }
 
-export default function TypingIndicator({ taskId, meId: _meId }: TypingIndicatorProps) {
+export default function TypingIndicator({ taskId }: TypingIndicatorProps) {
   // Store typing is Record<taskId, userName>
   const typing = useProjectStore(s => s.typing);
   const userName = typing[taskId];
