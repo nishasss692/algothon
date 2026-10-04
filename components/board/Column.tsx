@@ -13,15 +13,39 @@ interface ColumnProps {
   title: string;
   tasks: Task[];
   projectId: string;
+  selectedTaskId?: string | null;
   currentUserId?: string;
   onSelectTask?: (taskId: string) => void;
 }
 
-const STATUS_ACCENT_COLORS: Record<TaskStatus, { bg: string; text: string; dot: string }> = {
-  todo: { bg: 'bg-slate-100', text: 'text-slate-700', dot: 'bg-slate-400' },
-  in_progress: { bg: 'bg-blue-50', text: 'text-blue-700', dot: 'bg-blue-500' },
-  review: { bg: 'bg-amber-50', text: 'text-amber-700', dot: 'bg-amber-500' },
-  done: { bg: 'bg-emerald-50', text: 'text-emerald-700', dot: 'bg-emerald-500' },
+const STATUS_THEMES: Record<
+  TaskStatus,
+  {
+    dotColor: string;
+    borderTop: string;
+    badgeStyle: string;
+  }
+> = {
+  todo: {
+    dotColor: 'bg-slate-500',
+    borderTop: 'border-t-slate-500',
+    badgeStyle: 'bg-slate-100 text-slate-700 border-slate-200',
+  },
+  in_progress: {
+    dotColor: 'bg-blue-600',
+    borderTop: 'border-t-blue-600',
+    badgeStyle: 'bg-blue-50 text-blue-700 border-blue-200',
+  },
+  review: {
+    dotColor: 'bg-amber-500',
+    borderTop: 'border-t-amber-500',
+    badgeStyle: 'bg-amber-50 text-amber-700 border-amber-200',
+  },
+  done: {
+    dotColor: 'bg-emerald-600',
+    borderTop: 'border-t-emerald-600',
+    badgeStyle: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  },
 };
 
 export function Column({
@@ -29,6 +53,7 @@ export function Column({
   title,
   tasks,
   projectId,
+  selectedTaskId,
   currentUserId,
   onSelectTask,
 }: ColumnProps) {
@@ -37,7 +62,6 @@ export function Column({
   const [newTitle, setNewTitle] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // Droppable container for this column (supports empty column drops)
   const { setNodeRef, isOver } = useDroppable({
     id: status,
     data: {
@@ -48,7 +72,7 @@ export function Column({
   });
 
   const taskIds = tasks.map((t) => t.id);
-  const color = STATUS_ACCENT_COLORS[status];
+  const theme = STATUS_THEMES[status] || STATUS_THEMES.todo;
 
   async function handleQuickAdd(e: FormEvent) {
     e.preventDefault();
@@ -71,32 +95,83 @@ export function Column({
   return (
     <div
       ref={setNodeRef}
-      className={`flex flex-col h-full rounded-2xl border transition-colors bg-gray-50/70 ${
+      className={`flex flex-col h-full rounded-2xl border border-slate-200/90 bg-slate-100/80 shadow-xs transition-all overflow-hidden ${
         isOver
-          ? 'border-green-400 ring-2 ring-green-400/20 bg-green-50/20'
-          : 'border-gray-200/90'
+          ? 'border-blue-400 bg-blue-50/40 ring-2 ring-blue-200 shadow-md'
+          : 'hover:border-slate-300'
       }`}
     >
-      {/* Column Header */}
-      <div className="flex items-center justify-between px-4 py-3.5 border-b border-gray-200/70">
-        <div className="flex items-center gap-2">
-          <span className={`h-2.5 w-2.5 rounded-full ${color.dot}`} />
-          <h2 className="text-sm font-semibold text-gray-800">{title}</h2>
+      {/* Column Top Header */}
+      <div className={`border-t-[3px] ${theme.borderTop} bg-white px-4 py-3.5 border-b border-slate-200/80 flex items-center justify-between`}>
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className={`h-2.5 w-2.5 rounded-full ${theme.dotColor} shrink-0`} />
+          <h2 className="text-sm font-semibold tracking-tight text-slate-900 truncate">
+            {title}
+          </h2>
+          <span
+            className={`rounded-full border px-2 py-0.5 text-xs font-semibold shrink-0 ${theme.badgeStyle}`}
+          >
+            {tasks.length}
+          </span>
         </div>
-        <span
-          className={`inline-flex items-center justify-center rounded-full px-2 py-0.5 text-xs font-semibold ${color.bg} ${color.text}`}
+
+        <button
+          type="button"
+          onClick={() => setQuickAddOpen((prev) => !prev)}
+          className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:border-blue-300 hover:text-blue-600 hover:bg-slate-50 transition shadow-2xs"
+          title={`Add new task to ${title}`}
         >
-          {tasks.length}
-        </span>
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M12 4v16m8-8H4" />
+          </svg>
+        </button>
       </div>
 
-      {/* Task Cards List */}
-      <div className="flex-1 p-2.5 space-y-2.5 overflow-y-auto min-h-[140px]">
+      {/* Task Cards Scroll Container */}
+      <div className="flex-1 p-3 space-y-3 overflow-y-auto min-h-[160px]">
+        {/* Quick Add Top Input when active */}
+        {quickAddOpen && (
+          <form
+            onSubmit={handleQuickAdd}
+            className="rounded-xl border border-blue-300 bg-white p-3 shadow-md space-y-2.5 animate-in fade-in duration-150"
+          >
+            <input
+              type="text"
+              autoFocus
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+              placeholder="What needs to be done? Press Enter..."
+              disabled={submitting}
+              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-blue-500 focus:outline-none transition"
+            />
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setQuickAddOpen(false);
+                  setNewTitle('');
+                }}
+                className="rounded-lg px-2.5 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={!newTitle.trim() || submitting}
+                className="rounded-lg bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50 transition shadow-2xs"
+              >
+                {submitting ? 'Adding...' : 'Add Task'}
+              </button>
+            </div>
+          </form>
+        )}
+
         <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
           {tasks.map((task) => (
             <TaskCard
               key={task.id}
               task={task}
+              isSelected={selectedTaskId === task.id}
               currentUserId={currentUserId}
               onSelectTask={onSelectTask}
             />
@@ -104,59 +179,15 @@ export function Column({
         </SortableContext>
 
         {/* Empty State */}
-        {tasks.length === 0 && (
-          <div className="flex h-28 items-center justify-center rounded-xl border border-dashed border-gray-200 bg-white/50 text-center text-xs text-gray-400 select-none">
-            {isOver ? 'Drop task here' : 'No tasks yet'}
-          </div>
-        )}
-      </div>
-
-      {/* Quick Add Section */}
-      <div className="p-2.5 pt-0">
-        {quickAddOpen ? (
-          <form onSubmit={handleQuickAdd} className="rounded-xl border border-gray-300 bg-white p-2.5 shadow-sm">
-            <input
-              type="text"
-              autoFocus
-              disabled={submitting || conn !== 'live'}
-              value={newTitle}
-              onChange={(e) => setNewTitle(e.target.value)}
-              placeholder="What needs to be done?"
-              className="w-full text-xs text-gray-900 outline-none placeholder:text-gray-400"
-            />
-            <div className="mt-2.5 flex items-center justify-end gap-1.5">
-              <button
-                type="button"
-                onClick={() => {
-                  setQuickAddOpen(false);
-                  setNewTitle('');
-                }}
-                disabled={submitting}
-                className="rounded-lg px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={!newTitle.trim() || submitting || conn !== 'live'}
-                className="rounded-lg bg-green-700 px-3 py-1 text-xs font-semibold text-white transition hover:bg-green-800 disabled:opacity-50"
-              >
-                {submitting ? 'Adding...' : 'Add'}
-              </button>
-            </div>
-          </form>
-        ) : (
-          <button
-            type="button"
+        {tasks.length === 0 && !quickAddOpen && (
+          <div
             onClick={() => setQuickAddOpen(true)}
-            disabled={conn !== 'live'}
-            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-gray-300 py-2 text-xs font-medium text-gray-500 hover:border-gray-400 hover:bg-white hover:text-gray-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex h-28 flex-col items-center justify-center rounded-xl border border-dashed border-slate-300/80 bg-white/50 text-center transition hover:border-blue-400 hover:bg-white cursor-pointer group"
           >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Add task
-          </button>
+            <span className="text-xs font-medium text-slate-500 group-hover:text-blue-600 transition">
+              {isOver ? 'Drop card here' : '+ New Task'}
+            </span>
+          </div>
         )}
       </div>
     </div>
