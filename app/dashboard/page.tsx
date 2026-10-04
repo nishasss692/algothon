@@ -1,166 +1,226 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect } from 'react';
 import Link from 'next/link';
-import { supabase } from '@/lib/supabase';
-import { useSession } from '@/lib/hooks/useSession';
-import type { Profile } from '@/lib/types';
+import { format } from 'date-fns';
+import AuthGuard from '@/components/AuthGuard';
+import { useDashboardData } from '@/lib/useDashboardData';
+import {
+  openTasks,
+  overdueTasks,
+  atRiskTasks,
+  completionPercent,
+  workloadByMember,
+  progressByProject,
+} from '@/lib/dashboardStats';
+import StatCard from '@/components/dashboard/StatCard';
+import WorkloadBars from '@/components/dashboard/WorkloadBars';
+import ProjectProgress from '@/components/dashboard/ProjectProgress';
+import OverdueList from '@/components/dashboard/OverdueList';
+import Skeleton from '@/components/ui/Skeleton';
+import EmptyState from '@/components/ui/EmptyState';
 
 export default function DashboardPage() {
-  const router = useRouter();
-  const session = useSession();
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [signingOut, setSigningOut] = useState(false);
+  return (
+    <AuthGuard>
+      <DashboardContent />
+    </AuthGuard>
+  );
+}
+
+function DashboardContent() {
+  const { tasks, projects, profiles, conn, loading, error, reload } =
+    useDashboardData();
 
   useEffect(() => {
-    // If the URL has an error in the hash or search params (e.g. from an old confirmation email)
-    if (typeof window !== 'undefined') {
-      const hasHashError = window.location.hash.includes('error=');
-      const hasSearchError = window.location.search.includes('error=');
-      if (hasHashError || hasSearchError) {
-        router.replace(`/auth/callback${window.location.search}${window.location.hash}`);
-        return;
-      }
-    }
+    document.title = 'Dashboard';
+  }, []);
 
-    if (session === null) {
-      router.replace('/login');
-    }
-  }, [session, router]);
+  const today = format(new Date(), 'yyyy-MM-dd');
 
-  useEffect(() => {
-    if (session?.user) {
-      supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', session.user.id)
-        .maybeSingle()
-        .then(({ data }) => {
-          if (data) {
-            setProfile(data as Profile);
-          }
-        });
-    }
-  }, [session]);
+  const open = openTasks(tasks);
+  const overdue = overdueTasks(tasks, today);
+  const atRisk = atRiskTasks(tasks, today);
+  const compPct = completionPercent(tasks);
+  const workload = workloadByMember(tasks, profiles);
+  const projProgress = progressByProject(tasks, projects);
 
-  async function handleSignOut() {
-    setSigningOut(true);
-    await supabase.auth.signOut();
-    router.replace('/login');
+  const projectNames: Record<string, string> = {};
+  for (const p of projects) {
+    projectNames[p.id] = p.name;
   }
 
-  if (session === undefined || session === null) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-gray-50">
-        <div className="flex flex-col items-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-green-600 border-t-transparent" />
-          <p className="mt-4 text-sm text-gray-600">Loading your workspace...</p>
-        </div>
-      </main>
-    );
-  }
-
-  const displayName =
-    profile?.name ||
-    session.user.user_metadata?.name ||
-    session.user.email?.split('@')[0] ||
-    'Collaborator';
+  const isLive = conn === 'live';
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Top Navigation */}
-      <header className="border-b border-gray-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex items-center space-x-4">
-            <span className="text-xl font-bold tracking-tight text-gray-900">
-              Workspace
-            </span>
-            <nav className="flex space-x-2">
-              <Link
-                href="/dashboard"
-                className="rounded-lg bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-900"
-              >
-                Dashboard
-              </Link>
-              <Link
-                href="/projects"
-                className="rounded-lg px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-900"
-              >
-                Projects
-              </Link>
-            </nav>
+    <div
+      style={{
+        maxWidth: 1100,
+        margin: '0 auto',
+        padding: '24px 20px 48px 20px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 24,
+      }}
+    >
+      {/* Header */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
+        <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: '#111827' }}>
+          Dashboard
+        </h1>
+
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 12,
+            fontWeight: 500,
+            color: isLive ? '#065f46' : '#92400e',
+            background: isLive ? '#d1fae5' : '#fef3c7',
+            padding: '4px 10px',
+            borderRadius: 999,
+          }}
+        >
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: isLive ? '#10b981' : '#f59e0b',
+            }}
+          />
+          <span>{isLive ? 'Live' : 'Reconnecting'}</span>
+        </div>
+      </div>
+
+      {/* Loading state */}
+      {loading ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: 16,
+            }}
+          >
+            <Skeleton style={{ height: 84 }} />
+            <Skeleton style={{ height: 84 }} />
+            <Skeleton style={{ height: 84 }} />
+            <Skeleton style={{ height: 84 }} />
           </div>
-
-          <div className="flex items-center space-x-4">
-            <div className="flex items-center space-x-2">
-              <div
-                className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold text-white"
-                style={{ backgroundColor: profile?.color || '#16a34a' }}
-              >
-                {displayName.charAt(0).toUpperCase()}
-              </div>
-              <div className="hidden text-left sm:block">
-                <p className="text-sm font-medium text-gray-900">{displayName}</p>
-                <p className="text-xs text-gray-500">{session.user.email}</p>
-              </div>
-            </div>
-
-            <button
-              onClick={handleSignOut}
-              disabled={signingOut}
-              className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+              gap: 16,
+            }}
+          >
+            <Skeleton style={{ height: 220 }} />
+            <Skeleton style={{ height: 220 }} />
+          </div>
+          <Skeleton style={{ height: 260 }} />
+        </div>
+      ) : error ? (
+        /* Error state */
+        <div
+          style={{
+            background: '#fef2f2',
+            border: '1px solid #fee2e2',
+            padding: 24,
+            borderRadius: 12,
+            textAlign: 'center',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 12,
+          }}
+        >
+          <p style={{ margin: 0, color: '#b91c1c', fontSize: 14 }}>{error}</p>
+          <button
+            type="button"
+            onClick={reload}
+            style={{
+              padding: '6px 16px',
+              background: '#dc2626',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              fontWeight: 500,
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      ) : projects.length === 0 ? (
+        /* Empty state */
+        <EmptyState
+          title="No projects yet"
+          action={
+            <Link
+              href="/projects"
+              style={{
+                display: 'inline-block',
+                marginTop: 8,
+                padding: '8px 16px',
+                background: '#6366f1',
+                color: '#ffffff',
+                borderRadius: 8,
+                textDecoration: 'none',
+                fontWeight: 600,
+                fontSize: 14,
+              }}
             >
-              {signingOut ? 'Signing out...' : 'Sign out'}
-            </button>
+              Go to Projects
+            </Link>
+          }
+        />
+      ) : (
+        /* Content Grid */
+        <>
+          {/* Stat Cards */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+              gap: 16,
+            }}
+          >
+            <StatCard label="Overdue" value={overdue.length} accentColor="#dc2626" />
+            <StatCard label="At risk" value={atRisk.length} accentColor="#d97706" />
+            <StatCard label="Open tasks" value={open.length} />
+            <StatCard label="Completion" value={`${compPct}%`} />
           </div>
-        </div>
-      </header>
 
-      {/* Main Dashboard Content */}
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h1 className="text-2xl font-bold text-gray-900">
-            Welcome back, {displayName}!
-          </h1>
-          <p className="mt-1 text-sm text-gray-600">
-            You are successfully authenticated in your Collaborative Project Workspace.
-          </p>
-
-          <div className="mt-8 grid grid-cols-1 gap-5 sm:grid-cols-3">
-            <div className="rounded-xl border border-gray-100 bg-gray-50 p-5">
-              <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-                Authentication Status
-              </p>
-              <p className="mt-2 text-lg font-bold text-green-700">Verified & Active</p>
-              <p className="mt-1 text-xs text-gray-500">{session.user.email}</p>
-            </div>
-
-            <div className="rounded-xl border border-gray-100 bg-gray-50 p-5">
-              <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-                User ID
-              </p>
-              <p className="mt-2 font-mono text-xs text-gray-700 truncate">
-                {session.user.id}
-              </p>
-              <p className="mt-1 text-xs text-gray-500">Linked to Supabase Auth</p>
-            </div>
-
-            <div className="rounded-xl border border-gray-100 bg-gray-50 p-5">
-              <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-                Next Steps
-              </p>
-              <Link
-                href="/projects"
-                className="mt-2 inline-block font-semibold text-green-700 hover:text-green-800"
-              >
-                Go to Projects →
-              </Link>
-              <p className="mt-1 text-xs text-gray-500">View boards and collaborative tasks</p>
-            </div>
+          {/* Two-column Workload + Project Progress */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
+              gap: 16,
+            }}
+          >
+            <WorkloadBars workload={workload} />
+            <ProjectProgress projects={projProgress} />
           </div>
-        </div>
-      </main>
+
+          {/* Full width Overdue List */}
+          <OverdueList
+            overdue={overdue}
+            atRisk={atRisk}
+            projectNames={projectNames}
+            profiles={profiles}
+            today={today}
+          />
+        </>
+      )}
     </div>
   );
 }

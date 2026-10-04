@@ -3,6 +3,22 @@ import { useProjectStore } from './store';
 import type { Task, TaskStatus } from './types';
 import { toast } from 'sonner';
 
+export type EditableTaskPatch = Partial<
+  Pick<Task, 'title' | 'description' | 'status' | 'assignee_id' | 'due_date'>
+>;
+
+export class ConflictError extends Error {
+  latest: Task;
+  mine: EditableTaskPatch;
+
+  constructor(latest: Task, mine: EditableTaskPatch) {
+    super('Conflict');
+    this.name = 'ConflictError';
+    this.latest = latest;
+    this.mine = mine;
+  }
+}
+
 export interface MoveTaskParams {
   taskId: string;
   projectId: string;
@@ -34,6 +50,28 @@ export interface UpdateTaskWithVersionParams {
       'title' | 'description' | 'status' | 'assignee_id' | 'due_date' | 'archived'
     >
   >;
+}
+
+/**
+ * Backward-compatible task edit helper used by field-level editors.
+ * Throws ConflictError when version check fails.
+ */
+export async function editTask(task: Task, patch: EditableTaskPatch): Promise<void> {
+  const result = await updateTaskWithVersion({
+    taskId: task.id,
+    expectedVersion: task.version,
+    patch,
+  });
+
+  if (result.status === 'success') {
+    return;
+  }
+
+  if (result.status === 'conflict') {
+    throw new ConflictError(result.latestTask ?? task, patch);
+  }
+
+  throw new Error(result.message);
 }
 
 /**
