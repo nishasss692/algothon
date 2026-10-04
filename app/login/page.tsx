@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useEffect, useState, type FormEvent } from 'react';
@@ -7,16 +6,19 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { useSession } from '@/lib/hooks/useSession';
 
-export default function SignupPage() {
+export default function LoginPage() {
   const router = useRouter();
   const session = useSession();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Unconfirmed email resend state
+  const [isEmailUnconfirmed, setIsEmailUnconfirmed] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendStatus, setResendStatus] = useState('');
 
   useEffect(() => {
     if (session) {
@@ -24,48 +26,63 @@ export default function SignupPage() {
     }
   }, [session, router]);
 
-  async function handleSignup(event: FormEvent<HTMLFormElement>) {
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError('');
-    setMessage('');
-
-    if (password.length < 8) {
-      setError('Password must contain at least 8 characters.');
-      return;
-    }
-
-    if (password !== confirmPassword) {
-      setError('Passwords do not match.');
-      return;
-    }
-
+    setIsEmailUnconfirmed(false);
+    setResendStatus('');
     setLoading(true);
 
     try {
-      const { data, error } = await supabase.auth.signUp({
+      const { error: signInError } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/dashboard`,
-        },
       });
 
-      if (error) {
-        setError(error.message);
+      if (signInError) {
+        const msg = signInError.message.toLowerCase();
+        if (msg.includes('email not confirmed') || signInError.code === 'email_not_confirmed') {
+          setIsEmailUnconfirmed(true);
+          setError('Your email address has not been confirmed yet. Please check your inbox or click below to resend the confirmation link.');
+        } else if (msg.includes('invalid login credentials')) {
+          setError('Invalid email or password. Please check your credentials and try again.');
+        } else {
+          setError(signInError.message);
+        }
         return;
       }
 
-      if (data.session) {
-        router.replace('/dashboard');
-      } else {
-        setMessage(
-          'Account created! Check your email for a confirmation link before signing in.'
-        );
-      }
+      router.replace('/dashboard');
     } catch {
-      setError('Something went wrong. Please try again.');
+      setError('Something went wrong. Please check your internet connection and try again.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleResendConfirmation() {
+    if (!email.trim()) return;
+    setResending(true);
+    setResendStatus('');
+
+    try {
+      const { error: resendErr } = await supabase.auth.resend({
+        type: 'signup',
+        email: email.trim(),
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+
+      if (resendErr) {
+        setResendStatus(`Failed to resend: ${resendErr.message}`);
+      } else {
+        setResendStatus('Confirmation email resent! Check your inbox.');
+      }
+    } catch {
+      setResendStatus('Failed to send confirmation email. Please try again.');
+    } finally {
+      setResending(false);
     }
   }
 
@@ -82,18 +99,18 @@ export default function SignupPage() {
       <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
         <div className="mb-8 text-center">
           <h1 className="text-3xl font-bold tracking-tight text-gray-900">
-            Create your account
+            Welcome back
           </h1>
           <p className="mt-2 text-sm text-gray-500">
-            Join your collaborative workspace
+            Sign in to your collaborative workspace
           </p>
         </div>
 
-        <form onSubmit={handleSignup} className="space-y-5">
+        <form onSubmit={handleLogin} className="space-y-4">
           <div>
             <label
               htmlFor="email"
-              className="mb-2 block text-sm font-medium text-gray-700"
+              className="mb-1.5 block text-sm font-medium text-gray-700"
             >
               Email address
             </label>
@@ -103,68 +120,53 @@ export default function SignupPage() {
               autoComplete="email"
               required
               value={email}
-              onChange={(event) => setEmail(event.target.value)}
+              onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
-              className="w-full rounded-lg border border-gray-300 px-4 py-3 text-gray-900 outline-none focus:border-green-600 focus:ring-2 focus:ring-green-100"
+              className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 outline-none transition focus:border-green-600 focus:ring-2 focus:ring-green-100"
             />
           </div>
 
           <div>
             <label
               htmlFor="password"
-              className="mb-2 block text-sm font-medium text-gray-700"
+              className="mb-1.5 block text-sm font-medium text-gray-700"
             >
               Password
             </label>
             <input
               id="password"
               type="password"
-              autoComplete="new-password"
+              autoComplete="current-password"
               required
-              minLength={8}
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="At least 8 characters"
-              className="w-full rounded-lg border border-gray-300 px-4 py-3 text-gray-900 outline-none focus:border-green-600 focus:ring-2 focus:ring-green-100"
-            />
-          </div>
-
-          <div>
-            <label
-              htmlFor="confirmPassword"
-              className="mb-2 block text-sm font-medium text-gray-700"
-            >
-              Confirm password
-            </label>
-            <input
-              id="confirmPassword"
-              type="password"
-              autoComplete="new-password"
-              required
-              minLength={8}
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              placeholder="Re-enter your password"
-              className="w-full rounded-lg border border-gray-300 px-4 py-3 text-gray-900 outline-none focus:border-green-600 focus:ring-2 focus:ring-green-100"
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter your password"
+              className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 outline-none transition focus:border-green-600 focus:ring-2 focus:ring-green-100"
             />
           </div>
 
           {error && (
-            <p
+            <div
               role="alert"
-              className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700"
+              className="rounded-lg bg-red-50 p-3.5 text-sm text-red-700 space-y-2"
             >
-              {error}
-            </p>
-          )}
-
-          {message && (
-            <p
-              role="status"
-              className="rounded-lg bg-green-50 px-4 py-3 text-sm text-green-800"
-            >
-              {message}
-            </p>
+              <p>{error}</p>
+              {isEmailUnconfirmed && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={handleResendConfirmation}
+                    disabled={resending}
+                    className="font-semibold underline hover:text-red-900 disabled:opacity-60"
+                  >
+                    {resending ? 'Sending link...' : 'Resend confirmation email'}
+                  </button>
+                  {resendStatus && (
+                    <p className="mt-1 text-xs text-red-800">{resendStatus}</p>
+                  )}
+                </div>
+              )}
+            </div>
           )}
 
           <button
@@ -172,21 +174,20 @@ export default function SignupPage() {
             disabled={loading}
             className="w-full rounded-lg bg-green-700 px-4 py-3 font-semibold text-white transition hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {loading ? 'Creating account...' : 'Create account'}
+            {loading ? 'Signing in...' : 'Sign in'}
           </button>
         </form>
 
         <p className="mt-6 text-center text-sm text-gray-600">
-          Already have an account?{' '}
+          Don&apos;t have an account?{' '}
           <Link
-            href="/login"
+            href="/signup"
             className="font-semibold text-green-700 hover:text-green-800"
           >
-            Sign in
+            Create one
           </Link>
         </p>
       </div>
     </main>
   );
 }
-
