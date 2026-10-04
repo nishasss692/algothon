@@ -1,6 +1,4 @@
-'use client';
-
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 
 interface ProjectProgressItem {
   id: string;
@@ -15,8 +13,6 @@ interface ProjectProgressProps {
 }
 
 export default function ProjectProgress({ projects }: ProjectProgressProps) {
-  const router = useRouter();
-
   return (
     <div
       style={{
@@ -37,9 +33,9 @@ export default function ProjectProgress({ projects }: ProjectProgressProps) {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {projects.map((p) => (
-            <div
+            <Link
               key={p.id}
-              onClick={() => router.push(`/projects/${p.id}`)}
+              href={`/projects/${p.id}`}
               style={{
                 display: 'grid',
                 gridTemplateColumns: '140px 1fr auto',
@@ -49,6 +45,7 @@ export default function ProjectProgress({ projects }: ProjectProgressProps) {
                 padding: '6px 8px',
                 borderRadius: 8,
                 transition: 'background 150ms ease',
+                textDecoration: 'none',
               }}
               onMouseEnter={(e) => (e.currentTarget.style.background = '#f9fafb')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
@@ -95,7 +92,7 @@ export default function ProjectProgress({ projects }: ProjectProgressProps) {
               >
                 {p.total === 0 ? 'No tasks yet' : `${p.done}/${p.total} (${p.percent}%)`}
               </span>
-            </div>
+            </Link>
           ))}
         </div>
       )}

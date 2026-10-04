@@ -10,8 +10,8 @@ import { toast } from 'sonner';
 interface CommentBoxProps {
   taskId: string;
   projectId: string;
-  channelRef: React.MutableRefObject<RealtimeChannel | undefined>;
-  me: Profile;
+  channelRef?: React.MutableRefObject<RealtimeChannel | undefined>;
+  me?: Profile | null;
 }
 
 export default function CommentBox({ taskId, projectId, channelRef, me }: CommentBoxProps) {
@@ -32,7 +32,9 @@ export default function CommentBox({ taskId, projectId, channelRef, me }: Commen
     const now = Date.now();
     if (now - lastTypingSend.current > 1500) {
       lastTypingSend.current = now;
-      channelRef.current?.send({ type: 'broadcast', event: 'typing', payload: { task_id: taskId, user_id: me.id } });
+      if (channelRef?.current && me) {
+        channelRef.current.send({ type: 'broadcast', event: 'typing', payload: { task_id: taskId, user_id: me.id } });
+      }
     }
   }
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useMemo, useRef } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { useSession } from '@/lib/hooks/useSession';
@@ -21,9 +21,11 @@ type NavView = 'board' | 'activity' | 'metrics' | 'repo' | 'team';
 export default function ProjectBoardPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const session = useSession();
 
   const projectId = (params?.id as string) || '';
+  const taskQuery = searchParams.get('task');
 
   const conn = useProjectStore((s) => s.conn);
   const online = useProjectStore((s) => s.online);
@@ -37,7 +39,13 @@ export default function ProjectBoardPage() {
   const [loading, setLoading] = useState(true);
   const [accessError, setAccessError] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(taskQuery || null);
+
+  useEffect(() => {
+    if (taskQuery) {
+      setSelectedTaskId(taskQuery);
+    }
+  }, [taskQuery]);
   const [searchQuery, setSearchQuery] = useState('');
   const [boardFilter, setBoardFilter] = useState<BoardFilter>('all');
   const [navView, setNavView] = useState<NavView>('board');
@@ -997,7 +1005,12 @@ export default function ProjectBoardPage() {
       <TaskDrawer
         taskId={selectedTaskId}
         projectId={projectId}
-        onClose={() => setSelectedTaskId(null)}
+        onClose={() => {
+          setSelectedTaskId(null);
+          if (typeof window !== 'undefined' && window.location.search.includes('task=')) {
+            router.replace(`/projects/${projectId}`, { scroll: false });
+          }
+        }}
       />
 
       {/* Documentation & Help Modal (Curved Rectangle) */}

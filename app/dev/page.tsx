@@ -314,8 +314,6 @@ export default function DevPage() {
         <TaskDrawer
           projectId={PROJECT_ID}
           taskId={TASK_ID}
-          me={mockMe}
-          channelRef={channelRef}
           onClose={() => setDrawerOpen(false)}
         />
       )}

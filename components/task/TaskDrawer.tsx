@@ -7,6 +7,11 @@ import { updateTaskWithVersion, archiveTask } from '@/lib/mutations';
 import { ConflictDialog } from '@/components/board/ConflictDialog';
 import { toast } from 'sonner';
 import { format, parseISO } from 'date-fns';
+import CommentBox from './CommentBox';
+import AttachButton from './AttachButton';
+import { downloadTaskFile } from '@/lib/files';
+import { formatBytes } from '@/lib/time';
+import { useMe } from '@/lib/useMe';
 
 interface TaskDrawerProps {
   taskId: string | null;
@@ -20,7 +25,8 @@ interface TaskDrawerContentProps {
   onClose: () => void;
 }
 
-function TaskDrawerContent({ task, onClose }: TaskDrawerContentProps) {
+function TaskDrawerContent({ task, projectId, onClose }: TaskDrawerContentProps) {
+  const { me } = useMe();
   const profiles = useProjectStore((s) => s.profiles);
   const conn = useProjectStore((s) => s.conn);
   const online = useProjectStore((s) => s.online);
@@ -413,17 +419,58 @@ function TaskDrawerContent({ task, onClose }: TaskDrawerContentProps) {
                             `changed status to ${(item.payload as any)?.to || 'new'}`}
                           {item.type === 'assignee_changed' && 'reassigned task'}
                           {item.type === 'due_changed' && 'updated due date'}
-                          {item.type === 'comment_added' && 'added a note'}
+                          {item.type === 'comment_added' && 'commented'}
+                          {item.type === 'file_added' && 'attached a file'}
                         </span>
                         <div className="text-[9px] text-slate-400 font-mono mt-0.5">
                           {dateStr}
                         </div>
+
+                        {item.type === 'comment_added' && (
+                          <div className="mt-1.5 rounded-md bg-white border border-slate-200 p-2 text-xs text-slate-800 whitespace-pre-wrap leading-relaxed shadow-2xs">
+                            {(item.payload as any)?.body}
+                          </div>
+                        )}
+
+                        {item.type === 'file_added' && (
+                          <div className="mt-1.5 flex items-center justify-between rounded-md bg-white border border-slate-200 px-2.5 py-1.5 text-xs shadow-2xs">
+                            <span className="truncate max-w-[180px] font-medium text-slate-700">
+                              📎 {(item.payload as any)?.file_name}
+                              {(item.payload as any)?.size
+                                ? ` (${formatBytes((item.payload as any).size)})`
+                                : ''}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                downloadTaskFile(
+                                  (item.payload as any)?.path,
+                                  (item.payload as any)?.file_name || 'download'
+                                )
+                              }
+                              className="text-[11px] font-semibold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                            >
+                              Download
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
                 })}
               </div>
             )}
+
+            {/* Comment Box & Attach Button */}
+            <div className="border-t border-slate-200/80 pt-2.5 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-[10px] uppercase tracking-wider font-semibold text-slate-500">
+                  Post Comment
+                </span>
+                <AttachButton projectId={projectId} taskId={task.id} />
+              </div>
+              <CommentBox taskId={task.id} projectId={projectId} me={me} />
+            </div>
           </div>
 
           {/* Metadata Strip */}
@@ -542,3 +589,5 @@ export function TaskDrawer({ taskId, projectId, onClose }: TaskDrawerProps) {
     />
   );
 }
+
+export default TaskDrawer;
