@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useId } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useProjectStore } from '@/lib/store';
 import type { Task, Profile, Activity, PresenceUser } from '@/lib/types';
@@ -24,7 +24,7 @@ export interface UseProjectRealtimeReturn {
 /**
  * Manages the single Realtime channel for a project:
  * - Subscribes to Postgres changes on tasks & activity
- * - Tracks collaborator presence (online avatars & viewing task indicator)
+ * - Tracks collaborator presence (sync, join, leave)
  * - Broadcasts typing indicators
  * - Manages connection status (connecting -> live -> reconnecting)
  * - Fetches initial tasks & member profiles upon successful subscription
@@ -35,8 +35,12 @@ export function useProjectRealtime({
   currentTaskId,
 }: UseProjectRealtimeOptions): UseProjectRealtimeReturn {
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const isSubscribedRef = useRef(false);
   const typingTimeoutsRef = useRef<Record<string, NodeJS.Timeout>>({});
   const lastTypingSentRef = useRef<number>(0);
+
+  // Generate a stable unique session ID per browser client so multi-window sessions are distinct
+  const sessionId = useId();
 
   // Keep refs for presence data so callbacks and channel events always read fresh values
   const currentUserRef = useRef(currentUser);
@@ -46,6 +50,27 @@ export function useProjectRealtime({
     currentUserRef.current = currentUser;
     currentTaskIdRef.current = currentTaskId;
   }, [currentUser, currentTaskId]);
+
+  // Safe tracking helper that only pushes when channel is subscribed
+  const trackPresence = useCallback(
+    async (
+      user: { id: string; name: string; color: string } | null | undefined,
+      taskId: string | null | undefined
+    ) => {
+      if (!channelRef.current || !isSubscribedRef.current || !user) return;
+      try {
+        await channelRef.current.track({
+          user_id: user.id,
+          name: user.name,
+          color: user.color,
+          task_id: taskId ?? null,
+        });
+      } catch (err) {
+        console.error('Failed to track presence:', err);
+      }
+    },
+    []
+  );
 
   // Helper to broadcast typing events with rate-limiting (max once per 1.5s)
   const broadcastTyping = useCallback((taskId: string) => {
@@ -67,24 +92,20 @@ export function useProjectRealtime({
   }, []);
 
   // Helper to re-track presence when the currently viewed task changes
-  const trackCurrentTask = useCallback((taskId: string | null) => {
-    const user = currentUserRef.current;
-    if (!channelRef.current || !user) return;
-    channelRef.current.track({
-      user_id: user.id,
-      name: user.name,
-      color: user.color,
-      task_id: taskId,
-    });
-  }, []);
+  const trackCurrentTask = useCallback(
+    (taskId: string | null) => {
+      trackPresence(currentUserRef.current, taskId);
+    },
+    [trackPresence]
+  );
 
   // 1. Channel Lifecycle Effect: Depends ONLY on projectId
   useEffect(() => {
     if (!projectId) return;
 
     let isCancelled = false;
-    const store = useProjectStore.getState();
-    store.setConn('connecting');
+    isSubscribedRef.current = false;
+    useProjectStore.getState().setConn('connecting');
 
     // Network offline/online listeners
     const handleOnline = () => {
@@ -99,16 +120,49 @@ export function useProjectRealtime({
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Establish single channel per project
+    // Establish single channel per project with a unique presence key per browser session
     const channelName = `project:${projectId}`;
+    const presenceKey = currentUserRef.current?.id
+      ? `${currentUserRef.current.id}:${sessionId}`
+      : sessionId;
+
     const channel = supabase.channel(channelName, {
       config: {
         presence: {
-          key: currentUserRef.current?.id || undefined,
+          key: presenceKey,
         },
       },
     });
     channelRef.current = channel;
+
+    // Helper to extract and deduplicate online collaborators across all presence keys
+    const updateOnlineUsers = () => {
+      if (isCancelled) return;
+      const state = channel.presenceState<PresenceUser>();
+      const presenceKeys = Object.keys(state);
+      const onlineUsers: PresenceUser[] = [];
+      const seen = new Set<string>();
+
+      for (const key of presenceKeys) {
+        const presences = state[key];
+        if (presences && Array.isArray(presences)) {
+          for (const u of presences) {
+            if (u && u.user_id && !seen.has(u.user_id)) {
+              seen.add(u.user_id);
+              onlineUsers.push(u);
+            }
+          }
+        }
+      }
+
+      useProjectStore.getState().setOnline(onlineUsers);
+    };
+
+    // Presence events: handle sync, join, and leave so incoming collaborators update immediately
+    channel
+      .on('presence', { event: 'sync' }, () => updateOnlineUsers('sync'))
+      .on('presence', { event: 'join' }, () => updateOnlineUsers('join'))
+      .on('presence', { event: 'leave' }, () => updateOnlineUsers('leave'));
 
     // Subscribe to tasks table changes (filtered by project_id)
     channel.on(
@@ -126,7 +180,6 @@ export function useProjectRealtime({
             useProjectStore.getState().removeTask(payload.old.id);
           }
         } else if (payload.new) {
-          // upsertTask automatically ignores stale echoes and handles soft deletes
           useProjectStore.getState().upsertTask(payload.new as Task);
         }
       }
@@ -148,26 +201,6 @@ export function useProjectRealtime({
         }
       }
     );
-
-    // Presence sync: update online collaborators in store
-    channel.on('presence', { event: 'sync' }, () => {
-      if (isCancelled) return;
-      const state = channel.presenceState<PresenceUser>();
-      const onlineUsers: PresenceUser[] = [];
-      const seen = new Set<string>();
-
-      for (const key of Object.keys(state)) {
-        const presences = state[key];
-        if (presences && presences.length > 0) {
-          const u = presences[0];
-          if (!seen.has(u.user_id)) {
-            seen.add(u.user_id);
-            onlineUsers.push(u);
-          }
-        }
-      }
-      useProjectStore.getState().setOnline(onlineUsers);
-    });
 
     // Broadcast typing events
     channel.on('broadcast', { event: 'typing' }, ({ payload }) => {
@@ -193,20 +226,15 @@ export function useProjectRealtime({
       if (isCancelled) return;
 
       if (status === 'SUBSCRIBED') {
-        // Track initial presence
-        const user = currentUserRef.current;
-        if (user) {
-          await channel.track({
-            user_id: user.id,
-            name: user.name,
-            color: user.color,
-            task_id: currentTaskIdRef.current ?? null,
-          });
+        isSubscribedRef.current = true;
+
+        // Track initial presence once channel is confirmed subscribed
+        if (currentUserRef.current) {
+          await trackPresence(currentUserRef.current, currentTaskIdRef.current);
         }
 
         // Fetch initial project data (tasks and member profiles)
         try {
-          // A. Tasks
           const { data: tasks, error: tasksError } = await supabase
             .from('tasks')
             .select('*')
@@ -218,7 +246,6 @@ export function useProjectRealtime({
             useProjectStore.getState().setTasks(tasks as Task[]);
           }
 
-          // B. Profiles for project members
           const { data: members, error: membersError } = await supabase
             .from('project_members')
             .select('user_id')
@@ -236,7 +263,6 @@ export function useProjectRealtime({
             }
           }
 
-          // C. Activity feed
           const { data: activity } = await supabase
             .from('activity')
             .select('*')
@@ -261,6 +287,7 @@ export function useProjectRealtime({
         status === 'TIMED_OUT' ||
         status === 'CLOSED'
       ) {
+        isSubscribedRef.current = false;
         if (!isCancelled) {
           useProjectStore.getState().setConn('reconnecting');
         }
@@ -270,32 +297,26 @@ export function useProjectRealtime({
     // Cleanup when component unmounts or projectId changes
     return () => {
       isCancelled = true;
+      isSubscribedRef.current = false;
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
 
-      // Clear any pending typing indicator timeouts
       Object.values(typingTimeoutsRef.current).forEach(clearTimeout);
       typingTimeoutsRef.current = {};
 
-      // Remove channel cleanly
       supabase.removeChannel(channel);
       channelRef.current = null;
 
-      // Reset store to clear previous project state
       useProjectStore.getState().reset();
     };
-  }, [projectId]);
+  }, [projectId, sessionId, trackPresence]);
 
-  // 2. Presence Update Effect: Re-tracks presence when user details or selected task change
+  // 2. Presence Update Effect: Re-tracks presence safely when user details or selected task change
   useEffect(() => {
-    if (!channelRef.current || !currentUser) return;
-    channelRef.current.track({
-      user_id: currentUser.id,
-      name: currentUser.name,
-      color: currentUser.color,
-      task_id: currentTaskId ?? null,
-    });
-  }, [currentUser?.id, currentUser?.name, currentUser?.color, currentTaskId, currentUser]);
+    if (isSubscribedRef.current && currentUser) {
+      trackPresence(currentUser, currentTaskId);
+    }
+  }, [currentUser, currentTaskId, trackPresence]);
 
   return {
     broadcastTyping,

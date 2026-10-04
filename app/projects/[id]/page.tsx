@@ -9,6 +9,7 @@ import { useProjectRealtime } from '@/lib/hooks/useProjectRealtime';
 import { useProjectStore } from '@/lib/store';
 import type { Project, Profile } from '@/lib/types';
 import { Board } from '@/components/board/Board';
+import { TaskDrawer } from '@/components/task/TaskDrawer';
 import { ConnectionBadge } from '@/components/ui/ConnectionBadge';
 import { OfflineBanner } from '@/components/ui/OfflineBanner';
 import { toast } from 'sonner';
@@ -269,6 +270,13 @@ export default function ProjectBoardPage() {
           onSelectTask={setSelectedTaskId}
         />
       </main>
+
+      {/* Task Drawer for viewing & editing tasks with optimistic concurrency control */}
+      <TaskDrawer
+        taskId={selectedTaskId}
+        projectId={projectId}
+        onClose={() => setSelectedTaskId(null)}
+      />
     </div>
   );
 }
