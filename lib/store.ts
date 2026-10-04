@@ -35,10 +35,28 @@ export const useProjectStore = create<ProjectStore>((set) => ({
   upsertTask: (task) =>
     set((state) => {
       const existing = state.tasks[task.id];
-      // Ignore stale realtime echoes
-      if (existing && existing.updated_at >= task.updated_at) return state;
+      // Ignore stale updates
+      if (existing) {
+        // If both have versions, strictly older version is stale
+        if (
+          typeof existing.version === 'number' &&
+          typeof task.version === 'number'
+        ) {
+          if (existing.version > task.version) return state;
+          // Same version: only stale if existing timestamp is strictly newer
+          if (
+            existing.version === task.version &&
+            existing.updated_at > task.updated_at
+          ) {
+            return state;
+          }
+        } else if (existing.updated_at > task.updated_at) {
+          return state;
+        }
+      }
       if (task.archived) {
-        const { [task.id]: _, ...rest } = state.tasks;
+        const rest = { ...state.tasks };
+        delete rest[task.id];
         return { tasks: rest };
       }
       return { tasks: { ...state.tasks, [task.id]: task } };
@@ -46,7 +64,8 @@ export const useProjectStore = create<ProjectStore>((set) => ({
 
   removeTask: (id) =>
     set((state) => {
-      const { [id]: _, ...rest } = state.tasks;
+      const rest = { ...state.tasks };
+      delete rest[id];
       return { tasks: rest };
     }),
 
@@ -74,7 +93,8 @@ export const useProjectStore = create<ProjectStore>((set) => ({
   setTyping: (taskId, userName) =>
     set((state) => {
       if (userName === null) {
-        const { [taskId]: _, ...rest } = state.typing;
+        const rest = { ...state.typing };
+        delete rest[taskId];
         return { typing: rest };
       }
       return { typing: { ...state.typing, [taskId]: userName } };

@@ -1,294 +1,335 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import type { RealtimeChannel } from '@supabase/supabase-js';
-import type { Profile } from '@/lib/types';
+import { useState } from 'react';
+import type { Task, TaskStatus } from '@/lib/types';
 import { useProjectStore } from '@/lib/store';
-import { useProjectMembers } from '@/lib/useProjectMembers';
-import { useDropZone } from '@/lib/useDropZone';
-import TaskFields from './TaskFields';
-import Timeline from './Timeline';
-import CommentBox from './CommentBox';
-import TypingIndicator from './TypingIndicator';
-import ViewersBar from './ViewersBar';
-import AttachButton, { type AttachButtonHandle } from './AttachButton';
-import Skeleton from '@/components/ui/Skeleton';
-import EmptyState from '@/components/ui/EmptyState';
+import { updateTaskWithVersion } from '@/lib/mutations';
+import { ConflictDialog } from '@/components/board/ConflictDialog';
+import { toast } from 'sonner';
 
-export interface TaskDrawerProps {
+interface TaskDrawerProps {
+  taskId: string | null;
   projectId: string;
-  taskId: string;
-  me: Profile;
-  channelRef: React.MutableRefObject<RealtimeChannel | undefined>;
   onClose: () => void;
 }
 
-export default function TaskDrawer({
-  projectId,
-  taskId,
-  me,
-  channelRef,
-  onClose,
-}: TaskDrawerProps) {
-  const task = useProjectStore((s) => s.tasks[taskId]);
+interface TaskDrawerContentProps {
+  task: Task;
+  projectId: string;
+  onClose: () => void;
+}
+
+function TaskDrawerContent({ task, onClose }: TaskDrawerContentProps) {
+  const profiles = useProjectStore((s) => s.profiles);
   const conn = useProjectStore((s) => s.conn);
-  const { members } = useProjectMembers(projectId);
+  const online = useProjectStore((s) => s.online);
 
-  const attachRef = useRef<AttachButtonHandle>(null);
-  const [uploadingChips, setUploadingChips] = useState<string[]>([]);
+  // Form states initialized directly from initial task prop
+  const [title, setTitle] = useState(task.title);
+  const [description, setDescription] = useState(task.description || '');
+  const [status, setStatus] = useState<TaskStatus>(task.status);
+  const [assigneeId, setAssigneeId] = useState<string>(task.assignee_id || '');
+  const [dueDate, setDueDate] = useState<string>(task.due_date || '');
+  const [baseVersion, setBaseVersion] = useState<number>(task.version);
+  const [saving, setSaving] = useState(false);
 
-  const { isDragging, dropProps } = useDropZone((files) => {
-    attachRef.current?.handleFiles(files);
-  });
+  // Conflict handling state
+  const [showConflictDialog, setShowConflictDialog] = useState(false);
+  const [conflictedTask, setConflictedTask] = useState<Task | null>(null);
+  const [pendingPatch, setPendingPatch] = useState<Partial<
+    Pick<
+      Task,
+      'title' | 'description' | 'status' | 'assignee_id' | 'due_date' | 'archived'
+    >
+  > | null>(null);
 
-  // Presence tracking: announce when live, clear when unmounting/changing
-  useEffect(() => {
-    if (conn === 'live') {
-      channelRef.current?.track({
-        user_id: me.id,
-        name: me.name,
-        color: me.color,
-        task_id: taskId,
-      });
+  // Collaborators currently viewing this task
+  const taskViewers = online.filter((u) => u.task_id === task.id);
+
+  async function handleSave() {
+    if (!title.trim()) {
+      toast.error('Task title cannot be empty.');
+      return;
     }
 
-    return () => {
-      channelRef.current?.track({
-        user_id: me.id,
-        name: me.name,
-        color: me.color,
-        task_id: null,
-      });
+    if (conn !== 'live') {
+      toast.error('Cannot save changes while offline or reconnecting.');
+      return;
+    }
+
+    setSaving(true);
+
+    const patch: Partial<
+      Pick<
+        Task,
+        'title' | 'description' | 'status' | 'assignee_id' | 'due_date' | 'archived'
+      >
+    > = {
+      title: title.trim(),
+      description: description.trim(),
+      status,
+      assignee_id: assigneeId ? assigneeId : null,
+      due_date: dueDate ? dueDate : null,
     };
-  }, [taskId, conn, me, channelRef]);
 
-  // Escape to close unless a dialog/modal is open
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        const dialogOpen = document.querySelector('[role="dialog"][aria-modal="true"]');
-        if (dialogOpen) return;
-        onClose();
-      }
+    const result = await updateTaskWithVersion({
+      taskId: task.id,
+      expectedVersion: baseVersion,
+      patch,
+    });
+
+    setSaving(false);
+
+    if (result.status === 'success') {
+      setBaseVersion(result.task.version);
+      toast.success('Task updated successfully.');
+    } else if (result.status === 'conflict') {
+      // Optimistic concurrency conflict detected!
+      setConflictedTask(result.latestTask);
+      setPendingPatch(patch);
+      setShowConflictDialog(true);
+      toast.warning('Edit conflict: Another collaborator updated this task.');
+    } else {
+      // General error (network/RLS) — preserve edits in form
+      toast.error(result.message);
     }
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  }
+
+  // Conflict Resolution: Take theirs (Discard local edits)
+  function handleTakeTheirs() {
+    if (conflictedTask) {
+      setTitle(conflictedTask.title);
+      setDescription(conflictedTask.description || '');
+      setStatus(conflictedTask.status);
+      setAssigneeId(conflictedTask.assignee_id || '');
+      setDueDate(conflictedTask.due_date || '');
+      setBaseVersion(conflictedTask.version);
+    }
+    setShowConflictDialog(false);
+    setConflictedTask(null);
+    setPendingPatch(null);
+    toast.info('Discarded local changes and loaded latest server version.');
+  }
+
+  // Conflict Resolution: Keep mine (Retry with latest version token)
+  async function handleKeepMine() {
+    if (!conflictedTask || !pendingPatch) return;
+
+    setSaving(true);
+    const result = await updateTaskWithVersion({
+      taskId: task.id,
+      expectedVersion: conflictedTask.version,
+      patch: pendingPatch,
+    });
+    setSaving(false);
+
+    if (result.status === 'success') {
+      setBaseVersion(result.task.version);
+      setShowConflictDialog(false);
+      setConflictedTask(null);
+      setPendingPatch(null);
+      toast.success('Task overwritten with your version.');
+    } else if (result.status === 'conflict') {
+      // Further conflict if another user wrote again
+      setConflictedTask(result.latestTask);
+      toast.warning('Another update occurred concurrently. Please review.');
+    } else {
+      toast.error(result.message);
+    }
+  }
 
   return (
-    <div className="task-drawer-panel" {...dropProps}>
-      <style>{`
-        .task-drawer-panel {
-          position: fixed;
-          top: 0;
-          right: 0;
-          width: 480px;
-          height: 100vh;
-          background: #ffffff;
-          box-shadow: -4px 0 24px rgba(0, 0, 0, 0.15);
-          z-index: 50;
-          display: flex;
-          flex-direction: column;
-          animation: slideInRight 150ms cubic-bezier(0.16, 1, 0.3, 1);
-          box-sizing: border-box;
-        }
-        @media (max-width: 639px) {
-          .task-drawer-panel {
-            width: 100vw;
-          }
-        }
-        @keyframes slideInRight {
-          from { transform: translateX(100%); }
-          to { transform: translateX(0); }
-        }
-      `}</style>
-
-      {/* Drag overlay */}
-      {isDragging && (
-        <div
-          style={{
-            position: 'absolute',
-            inset: 8,
-            border: '2px dashed #6366f1',
-            borderRadius: 12,
-            background: 'rgba(238, 242, 255, 0.9)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 100,
-            color: '#4f46e5',
-            fontWeight: 600,
-            fontSize: 16,
-            pointerEvents: 'none',
-          }}
-        >
-          Drop files to attach
-        </div>
-      )}
-
-      {/* Reconnecting offline notice */}
-      {conn !== 'live' && (
-        <div
-          style={{
-            background: '#fef3c7',
-            color: '#92400e',
-            padding: '6px 16px',
-            fontSize: 12,
-            fontWeight: 500,
-            textAlign: 'center',
-            borderBottom: '1px solid #fde68a',
-            flexShrink: 0,
-          }}
-        >
-          Reconnecting. Editing is paused.
-        </div>
-      )}
-
-      {/* Header */}
+    <>
+      {/* Backdrop */}
       <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '12px 16px',
-          borderBottom: '1px solid #e5e7eb',
-          flexShrink: 0,
-        }}
-      >
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close task"
-          style={{
-            background: 'none',
-            border: 'none',
-            fontSize: 18,
-            cursor: 'pointer',
-            padding: '4px 8px',
-            borderRadius: 6,
-            color: '#4b5563',
-          }}
-        >
-          ✕
-        </button>
+        className="fixed inset-0 z-40 bg-black/30 backdrop-blur-2xs transition-opacity"
+        onClick={onClose}
+      />
 
-        <ViewersBar taskId={taskId} meId={me.id} />
-      </div>
-
-      {/* Content states */}
-      {conn === 'connecting' && !task ? (
-        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, flex: 1 }}>
-          <Skeleton style={{ height: 32, width: '70%' }} />
-          <div style={{ display: 'flex', gap: 12 }}>
-            <Skeleton style={{ height: 28, width: 90 }} />
-            <Skeleton style={{ height: 28, width: 120 }} />
+      {/* Drawer Panel */}
+      <aside className="fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col bg-white shadow-2xl border-l border-gray-200 animate-in slide-in-from-right duration-200">
+        {/* Drawer Header */}
+        <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4 bg-gray-50/50">
+          <div className="flex items-center gap-2.5">
+            <span className="inline-flex items-center rounded-md bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700 ring-1 ring-inset ring-green-600/20">
+              v{baseVersion}
+            </span>
+            <span className="text-xs font-mono text-gray-500">
+              Task #{task.id.slice(0, 8)}
+            </span>
           </div>
-          <Skeleton style={{ height: 80, width: '100%' }} />
-          <Skeleton style={{ flex: 1, width: '100%' }} />
-        </div>
-      ) : !task ? (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <EmptyState
-            title="Task not found. It may have been archived."
-            action={
-              <button
-                type="button"
-                onClick={onClose}
-                style={{
-                  padding: '6px 14px',
-                  background: '#f3f4f6',
-                  border: '1px solid #d1d5db',
-                  borderRadius: 6,
-                  cursor: 'pointer',
-                  fontSize: 13,
-                }}
+
+          <div className="flex items-center gap-2">
+            {/* Viewers presence */}
+            {taskViewers.length > 0 && (
+              <div
+                className="flex items-center -space-x-1"
+                title={`Active viewers: ${taskViewers.map((v) => v.name).join(', ')}`}
               >
-                Close
-              </button>
-            }
-          />
-        </div>
-      ) : (
-        <>
-          {/* Scrollable area: TaskFields + Timeline */}
-          <div
-            style={{
-              flex: 1,
-              overflowY: 'auto',
-              display: 'flex',
-              flexDirection: 'column',
-              padding: '16px 16px 8px 16px',
-            }}
-          >
-            <TaskFields task={task} members={members} />
-
-            <div
-              style={{
-                fontWeight: 600,
-                fontSize: 13,
-                color: '#4b5563',
-                padding: '16px 0 8px 0',
-                borderTop: '1px solid #e5e7eb',
-                marginTop: 16,
-              }}
-            >
-              Activity
-            </div>
-
-            <div style={{ flex: 1, minHeight: 180, display: 'flex', flexDirection: 'column' }}>
-              <Timeline taskId={taskId} />
-            </div>
-          </div>
-
-          {/* Footer: Typing, uploading chips, attach + comment */}
-          <div
-            style={{
-              padding: '8px 16px 12px 16px',
-              borderTop: '1px solid #e5e7eb',
-              background: '#ffffff',
-              flexShrink: 0,
-            }}
-          >
-            <TypingIndicator taskId={taskId} meId={me.id} />
-
-            {uploadingChips.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, margin: '4px 0' }}>
-                {uploadingChips.map((name) => (
+                {taskViewers.map((v) => (
                   <span
-                    key={name}
-                    style={{
-                      fontSize: 11,
-                      background: '#e0e7ff',
-                      color: '#4338ca',
-                      padding: '2px 8px',
-                      borderRadius: 4,
-                    }}
+                    key={v.user_id}
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold text-white ring-2 ring-white"
+                    style={{ backgroundColor: v.color || '#10b981' }}
                   >
-                    Uploading {name}...
+                    {v.name.charAt(0).toUpperCase()}
                   </span>
                 ))}
               </div>
             )}
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <AttachButton
-                ref={attachRef}
-                projectId={projectId}
-                taskId={taskId}
-                onUploadingChange={setUploadingChips}
-              />
-              <div style={{ flex: 1 }}>
-                <CommentBox
-                  taskId={taskId}
-                  projectId={projectId}
-                  channelRef={channelRef}
-                  me={me}
-                />
-              </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition"
+              title="Close drawer"
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {/* Drawer Form Body */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          {/* Offline Warning Banner if disconnected */}
+          {conn !== 'live' && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-amber-500 animate-ping" />
+              <span>You are currently {conn}. Edits are preserved in form and saving will be enabled once live.</span>
+            </div>
+          )}
+
+          {/* Title */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5">
+              Title
+            </label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Task title"
+              className="w-full rounded-xl border border-gray-300 px-3.5 py-2 text-sm text-gray-900 focus:border-green-600 focus:ring-1 focus:ring-green-600 outline-none transition"
+            />
+          </div>
+
+          {/* Status & Assignee Row */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5">
+                Status
+              </label>
+              <select
+                value={status}
+                onChange={(e) => setStatus(e.target.value as TaskStatus)}
+                className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs font-medium text-gray-800 focus:border-green-600 focus:ring-1 focus:ring-green-600 outline-none bg-white transition"
+              >
+                <option value="todo">To do</option>
+                <option value="in_progress">In progress</option>
+                <option value="review">Review</option>
+                <option value="done">Done</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5">
+                Assignee
+              </label>
+              <select
+                value={assigneeId}
+                onChange={(e) => setAssigneeId(e.target.value)}
+                className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs font-medium text-gray-800 focus:border-green-600 focus:ring-1 focus:ring-green-600 outline-none bg-white transition"
+              >
+                <option value="">Unassigned</option>
+                {Object.values(profiles).map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
-        </>
-      )}
-    </div>
+
+          {/* Due Date */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5">
+              Due Date
+            </label>
+            <input
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+              className="w-full rounded-xl border border-gray-300 px-3.5 py-2 text-xs font-medium text-gray-800 focus:border-green-600 focus:ring-1 focus:ring-green-600 outline-none bg-white transition"
+            />
+          </div>
+
+          {/* Description */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5">
+              Description
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={5}
+              placeholder="Add details, acceptance criteria, or notes..."
+              className="w-full rounded-xl border border-gray-300 px-3.5 py-2.5 text-xs text-gray-900 focus:border-green-600 focus:ring-1 focus:ring-green-600 outline-none transition resize-none leading-relaxed"
+            />
+          </div>
+        </div>
+
+        {/* Drawer Footer Actions */}
+        <div className="border-t border-gray-200 px-6 py-4 flex items-center justify-end gap-3 bg-gray-50/50">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-gray-300 bg-white px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving || conn !== 'live'}
+            className="inline-flex items-center gap-2 rounded-xl bg-green-700 px-5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-green-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {saving ? (
+              <>
+                <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                <span>Saving...</span>
+              </>
+            ) : (
+              <span>Save changes</span>
+            )}
+          </button>
+        </div>
+      </aside>
+
+      {/* Conflict Resolution Modal */}
+      <ConflictDialog
+        isOpen={showConflictDialog}
+        localTitle={title}
+        serverTitle={conflictedTask?.title}
+        onTakeTheirs={handleTakeTheirs}
+        onKeepMine={handleKeepMine}
+      />
+    </>
+  );
+}
+
+export function TaskDrawer({ taskId, projectId, onClose }: TaskDrawerProps) {
+  const task = useProjectStore((s) => (taskId ? s.tasks[taskId] : null));
+
+  if (!taskId || !task) return null;
+
+  return (
+    <TaskDrawerContent
+      key={task.id}
+      task={task}
+      projectId={projectId}
+      onClose={onClose}
+    />
   );
 }
