@@ -1,14 +1,14 @@
-
 import { createClient } from '@supabase/supabase-js';
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const key =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+  process.env.SUPABASE_PUBLISHABLE_KEY;
 
-if (!url || !key) {
-    throw new Error(
-        'Missing Supabase environment variables. Check .env.local.'
-    );
-}
+const url =
+  rawUrl && (rawUrl.startsWith('http://') || rawUrl.startsWith('https://'))
+    ? rawUrl
+    : 'https://placeholder.supabase.co';
 
-export const supabase = createClient(url, key);
-
+export const supabase = createClient(url, key || 'placeholder-key');

@@ -6,12 +6,17 @@ import { createClient } from '@supabase/supabase-js';
 import { format, addDays, parse } from 'date-fns';
 import { randomUUID } from 'crypto';
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const anonKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+  process.env.SUPABASE_PUBLISHABLE_KEY;
+const serviceKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SECRET_KEY;
 
 if (!url || !anonKey || !serviceKey) {
-  console.error('Missing required env vars: NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY');
+  console.error('Missing required env vars: SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL, ANON/PUBLISHABLE_KEY, and SERVICE_ROLE/SECRET_KEY');
   process.exit(1);
 }
 
@@ -31,7 +36,8 @@ async function getOrCreateUser(email: string, password: string, name: string) {
   const { data: list } = await admin.auth.admin.listUsers();
   const existing = list?.users.find(u => u.email === email);
   if (existing) {
-    console.log(`  User ${email} already exists.`);
+    console.log(`  User ${email} already exists. Confirming email...`);
+    await admin.auth.admin.updateUserById(existing.id, { email_confirm: true });
     return existing;
   }
   const { data, error } = await admin.auth.admin.createUser({
@@ -180,6 +186,12 @@ async function main() {
 
   // Step 8: File upload for "Landing page QA"
   console.log('Step 8: Uploading file...');
+  const { data: buckets } = await admin.storage.listBuckets();
+  if (!buckets?.some(b => b.name === 'attachments')) {
+    await admin.storage.createBucket('attachments', { public: false });
+    console.log('  Created private "attachments" bucket.');
+  }
+
   const fileContent = Buffer.from('## Launch Checklist\n- [ ] Homepage live\n- [ ] Analytics tracking\n- [ ] Email flows tested\n- [ ] Support docs published\n');
   const fileUuid = randomUUID();
   const filePath = `${projectId}/${taskIds['Landing page QA']}/${fileUuid}-launch-checklist.txt`;
