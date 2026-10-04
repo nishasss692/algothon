@@ -160,9 +160,9 @@ export function useProjectRealtime({
 
     // Presence events: handle sync, join, and leave so incoming collaborators update immediately
     channel
-      .on('presence', { event: 'sync' }, () => updateOnlineUsers('sync'))
-      .on('presence', { event: 'join' }, () => updateOnlineUsers('join'))
-      .on('presence', { event: 'leave' }, () => updateOnlineUsers('leave'));
+      .on('presence', { event: 'sync' }, updateOnlineUsers)
+      .on('presence', { event: 'join' }, updateOnlineUsers)
+      .on('presence', { event: 'leave' }, updateOnlineUsers);
 
     // Subscribe to tasks table changes (filtered by project_id)
     channel.on(

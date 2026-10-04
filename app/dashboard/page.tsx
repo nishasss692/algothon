@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect } from 'react';
-import Link from 'next/link';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/AuthGuard';
 import { useDashboardData } from '@/lib/useDashboardData';
@@ -163,23 +162,25 @@ function DashboardContent() {
         /* Empty state */
         <EmptyState
           title="No projects yet"
+          description="You do not have any projects yet. Once projects are created or assigned, their progress and statistics will appear here."
           action={
-            <Link
-              href="/projects"
+            <button
+              type="button"
+              onClick={reload}
               style={{
-                display: 'inline-block',
                 marginTop: 8,
                 padding: '8px 16px',
                 background: '#6366f1',
                 color: '#ffffff',
+                border: 'none',
                 borderRadius: 8,
-                textDecoration: 'none',
+                cursor: 'pointer',
                 fontWeight: 600,
                 fontSize: 14,
               }}
             >
-              Go to Projects
-            </Link>
+              Refresh
+            </button>
           }
         />
       ) : (

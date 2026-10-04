@@ -44,8 +44,10 @@ export default function TaskFields({ task, members }: TaskFieldsProps) {
       await editTask(task, patch);
     } catch (err) {
       if (err instanceof ConflictError) {
+        const mineRecord = err.mine as unknown as Record<string, unknown>;
+        const latestRecord = err.latest as unknown as Record<string, unknown>;
         const allSame = Object.keys(err.mine).every(
-          k => err.mine[k as keyof Task] === err.latest[k as keyof Task]
+          k => mineRecord[k] === latestRecord[k]
         );
         if (!allSame) setConflict({ latest: err.latest, mine: err.mine });
       } else {

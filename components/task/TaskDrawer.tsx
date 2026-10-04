@@ -3,9 +3,10 @@
 import { useState } from 'react';
 import type { Task, TaskStatus } from '@/lib/types';
 import { useProjectStore } from '@/lib/store';
-import { updateTaskWithVersion } from '@/lib/mutations';
+import { updateTaskWithVersion, archiveTask } from '@/lib/mutations';
 import { ConflictDialog } from '@/components/board/ConflictDialog';
 import { toast } from 'sonner';
+import { format, parseISO } from 'date-fns';
 
 interface TaskDrawerProps {
   taskId: string | null;
@@ -23,8 +24,12 @@ function TaskDrawerContent({ task, onClose }: TaskDrawerContentProps) {
   const profiles = useProjectStore((s) => s.profiles);
   const conn = useProjectStore((s) => s.conn);
   const online = useProjectStore((s) => s.online);
+  const activityList = useProjectStore((s) => s.activity);
+  const conflicts = useProjectStore((s) => s.conflicts);
+  const setConflict = useProjectStore((s) => s.setConflict);
+  const clearConflict = useProjectStore((s) => s.clearConflict);
 
-  // Form states initialized directly from initial task prop
+  // Form states initialized directly from task
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description || '');
   const [status, setStatus] = useState<TaskStatus>(task.status);
@@ -32,19 +37,26 @@ function TaskDrawerContent({ task, onClose }: TaskDrawerContentProps) {
   const [dueDate, setDueDate] = useState<string>(task.due_date || '');
   const [baseVersion, setBaseVersion] = useState<number>(task.version);
   const [saving, setSaving] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+  const [confirmArchive, setConfirmArchive] = useState(false);
 
-  // Conflict handling state
-  const [showConflictDialog, setShowConflictDialog] = useState(false);
-  const [conflictedTask, setConflictedTask] = useState<Task | null>(null);
-  const [pendingPatch, setPendingPatch] = useState<Partial<
-    Pick<
-      Task,
-      'title' | 'description' | 'status' | 'assignee_id' | 'due_date' | 'archived'
-    >
-  > | null>(null);
+  // Active conflict state
+  const activeConflict = conflicts[task.id];
+  const [showConflictDialog, setShowConflictDialog] = useState(Boolean(activeConflict));
+  const [conflictedTask, setConflictedTask] = useState<Task | null>(
+    activeConflict?.serverTask || null
+  );
+  const [pendingPatch, setPendingPatch] = useState<Partial<Task> | null>(
+    activeConflict?.localPatch || null
+  );
 
   // Collaborators currently viewing this task
   const taskViewers = online.filter((u) => u.task_id === task.id);
+
+  // Filter real-time activity for this specific task
+  const taskActivities = activityList
+    .filter((a) => a.task_id === task.id)
+    .sort((a, b) => b.id - a.id);
 
   async function handleSave() {
     if (!title.trim()) {
@@ -82,55 +94,68 @@ function TaskDrawerContent({ task, onClose }: TaskDrawerContentProps) {
 
     if (result.status === 'success') {
       setBaseVersion(result.task.version);
-      toast.success('Task updated successfully.');
+      clearConflict(task.id);
+      toast.success('Task committed successfully.');
     } else if (result.status === 'conflict') {
-      // Optimistic concurrency conflict detected!
       setConflictedTask(result.latestTask);
       setPendingPatch(patch);
+      if (result.latestTask) {
+        setConflict({
+          taskId: task.id,
+          localVersion: baseVersion,
+          serverVersion: result.latestTask.version,
+          localPatch: patch,
+          serverTask: result.latestTask,
+          detectedAt: new Date().toISOString(),
+        });
+      }
       setShowConflictDialog(true);
       toast.warning('Edit conflict: Another collaborator updated this task.');
     } else {
-      // General error (network/RLS) — preserve edits in form
       toast.error(result.message);
     }
   }
 
-  // Conflict Resolution: Take theirs (Discard local edits)
+  // Conflict Resolution: Take theirs
   function handleTakeTheirs() {
-    if (conflictedTask) {
-      setTitle(conflictedTask.title);
-      setDescription(conflictedTask.description || '');
-      setStatus(conflictedTask.status);
-      setAssigneeId(conflictedTask.assignee_id || '');
-      setDueDate(conflictedTask.due_date || '');
-      setBaseVersion(conflictedTask.version);
+    const target = conflictedTask || activeConflict?.serverTask;
+    if (target) {
+      setTitle(target.title);
+      setDescription(target.description || '');
+      setStatus(target.status);
+      setAssigneeId(target.assignee_id || '');
+      setDueDate(target.due_date || '');
+      setBaseVersion(target.version);
     }
+    clearConflict(task.id);
     setShowConflictDialog(false);
     setConflictedTask(null);
     setPendingPatch(null);
-    toast.info('Discarded local changes and loaded latest server version.');
+    toast.info('Discarded local buffer and adopted latest server version.');
   }
 
-  // Conflict Resolution: Keep mine (Retry with latest version token)
+  // Conflict Resolution: Keep mine
   async function handleKeepMine() {
-    if (!conflictedTask || !pendingPatch) return;
+    const target = conflictedTask || activeConflict?.serverTask;
+    const patchToApply = pendingPatch || activeConflict?.localPatch;
+    if (!target || !patchToApply) return;
 
     setSaving(true);
     const result = await updateTaskWithVersion({
       taskId: task.id,
-      expectedVersion: conflictedTask.version,
-      patch: pendingPatch,
+      expectedVersion: target.version,
+      patch: patchToApply,
     });
     setSaving(false);
 
     if (result.status === 'success') {
       setBaseVersion(result.task.version);
+      clearConflict(task.id);
       setShowConflictDialog(false);
       setConflictedTask(null);
       setPendingPatch(null);
       toast.success('Task overwritten with your version.');
     } else if (result.status === 'conflict') {
-      // Further conflict if another user wrote again
       setConflictedTask(result.latestTask);
       toast.warning('Another update occurred concurrently. Please review.');
     } else {
@@ -138,111 +163,159 @@ function TaskDrawerContent({ task, onClose }: TaskDrawerContentProps) {
     }
   }
 
+  // Archive task with optimistic concurrency & conflict preservation
+  async function handleArchive() {
+    if (!task) return;
+    if (conn !== 'live') {
+      toast.error('Cannot archive task while offline or reconnecting.');
+      return;
+    }
+
+    setArchiving(true);
+    const result = await archiveTask(task.id, baseVersion);
+    setArchiving(false);
+
+    if (result.status === 'success') {
+      clearConflict(task.id);
+      toast.success('Task archived.');
+      onClose();
+    } else if (result.status === 'conflict') {
+      setConflictedTask(result.latestTask);
+      setPendingPatch({ archived: true });
+      setShowConflictDialog(true);
+      toast.warning('Edit conflict: Another collaborator updated this task.');
+    } else {
+      toast.error(result.message || 'Failed to archive task.');
+    }
+  }
+
+  const taskCode = `TSK-${task.id.slice(0, 4).toUpperCase()}`;
+
   return (
     <>
-      {/* Backdrop */}
+      {/* Semi-transparent Backdrop for mobile/tablet */}
       <div
-        className="fixed inset-0 z-40 bg-black/30 backdrop-blur-2xs transition-opacity"
+        className="fixed inset-0 z-40 bg-slate-900/20 backdrop-blur-2xs transition-opacity lg:bg-transparent lg:pointer-events-none"
         onClick={onClose}
       />
 
-      {/* Drawer Panel */}
-      <aside className="fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col bg-white shadow-2xl border-l border-gray-200 animate-in slide-in-from-right duration-200">
-        {/* Drawer Header */}
-        <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4 bg-gray-50/50">
-          <div className="flex items-center gap-2.5">
-            <span className="inline-flex items-center rounded-md bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700 ring-1 ring-inset ring-green-600/20">
-              v{baseVersion}
+      {/* Responsive Inspector Drawer Panel */}
+      <aside className="fixed inset-y-0 right-0 z-40 flex w-full sm:max-w-md lg:max-w-lg flex-col bg-white shadow-2xl border-l border-slate-200 animate-in slide-in-from-right duration-200 pointer-events-auto">
+        {/* Inspector Header */}
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5 bg-slate-50/80">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded">
+              {taskCode}
             </span>
-            <span className="text-xs font-mono text-gray-500">
-              Task #{task.id.slice(0, 8)}
+            <span className="font-mono text-[10px] text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded">
+              REV {baseVersion}
             </span>
+            {activeConflict && (
+              <span className="inline-flex items-center gap-1 font-mono text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-300 px-1.5 py-0.5 rounded">
+                ! CONFLICT
+              </span>
+            )}
           </div>
 
-          <div className="flex items-center gap-2">
-            {/* Viewers presence */}
+          <div className="flex items-center gap-2.5">
+            {/* Real-time viewers indicator */}
             {taskViewers.length > 0 && (
               <div
-                className="flex items-center -space-x-1"
+                className="flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-2.5 py-1 text-[11px] font-mono text-emerald-700"
                 title={`Active viewers: ${taskViewers.map((v) => v.name).join(', ')}`}
               >
-                {taskViewers.map((v) => (
-                  <span
-                    key={v.user_id}
-                    className="inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold text-white ring-2 ring-white"
-                    style={{ backgroundColor: v.color || '#10b981' }}
-                  >
-                    {v.name.charAt(0).toUpperCase()}
-                  </span>
-                ))}
+                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>{taskViewers.length} viewing</span>
               </div>
             )}
 
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition"
-              title="Close drawer"
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition"
+              title="Close inspector (Esc)"
             >
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
           </div>
         </div>
 
-        {/* Drawer Form Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-5">
-          {/* Offline Warning Banner if disconnected */}
-          {conn !== 'live' && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-amber-500 animate-ping" />
-              <span>You are currently {conn}. Edits are preserved in form and saving will be enabled once live.</span>
+        {/* Drawer Body */}
+        <div className="flex-1 overflow-y-auto p-5 space-y-4 font-sans text-xs">
+          {/* Active Conflict Alert Banner */}
+          {activeConflict && (
+            <div className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-rose-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 font-semibold">
+                  <span className="h-2 w-2 rounded-full bg-rose-600 animate-ping" />
+                  <span>Concurrent Version Collision (HTTP 409)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowConflictDialog(true)}
+                  className="rounded bg-rose-600 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-rose-700 transition"
+                >
+                  View Diff
+                </button>
+              </div>
+              <p className="text-[11px] text-rose-700 leading-normal">
+                This task was modified on the server while you held an older revision. Resolve the conflict below to persist your updates.
+              </p>
             </div>
           )}
 
-          {/* Title */}
+          {/* Offline Warning Banner */}
+          {conn !== 'live' && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-800 flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+              <span className="font-mono text-[11px]">System offline: Changes will be buffered locally.</span>
+            </div>
+          )}
+
+          {/* Task Title */}
           <div>
-            <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5">
-              Title
+            <label className="block text-[11px] font-mono font-medium text-slate-500 uppercase tracking-wider mb-1">
+              Task Title
             </label>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Task title"
-              className="w-full rounded-xl border border-gray-300 px-3.5 py-2 text-sm text-gray-900 focus:border-green-600 focus:ring-1 focus:ring-green-600 outline-none transition"
+              placeholder="Task summary or issue title"
+              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition"
             />
           </div>
 
-          {/* Status & Assignee Row */}
+          {/* Status & Assignee Grid */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5">
-                Status
+              <label className="block text-[11px] font-mono font-medium text-slate-500 uppercase tracking-wider mb-1">
+                Workflow Status
               </label>
               <select
                 value={status}
                 onChange={(e) => setStatus(e.target.value as TaskStatus)}
-                className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs font-medium text-gray-800 focus:border-green-600 focus:ring-1 focus:ring-green-600 outline-none bg-white transition"
+                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition"
               >
-                <option value="todo">To do</option>
-                <option value="in_progress">In progress</option>
-                <option value="review">Review</option>
-                <option value="done">Done</option>
+                <option value="todo">Backlog / To Do</option>
+                <option value="in_progress">In Progress</option>
+                <option value="review">In Review</option>
+                <option value="done">Completed</option>
               </select>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5">
+              <label className="block text-[11px] font-mono font-medium text-slate-500 uppercase tracking-wider mb-1">
                 Assignee
               </label>
               <select
                 value={assigneeId}
                 onChange={(e) => setAssigneeId(e.target.value)}
-                className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs font-medium text-gray-800 focus:border-green-600 focus:ring-1 focus:ring-green-600 outline-none bg-white transition"
+                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition"
               >
-                <option value="">Unassigned</option>
+                <option value="">[Unassigned]</option>
                 {Object.values(profiles).map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}
@@ -252,66 +325,202 @@ function TaskDrawerContent({ task, onClose }: TaskDrawerContentProps) {
             </div>
           </div>
 
-          {/* Due Date */}
-          <div>
-            <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5">
-              Due Date
-            </label>
-            <input
-              type="date"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-              className="w-full rounded-xl border border-gray-300 px-3.5 py-2 text-xs font-medium text-gray-800 focus:border-green-600 focus:ring-1 focus:ring-green-600 outline-none bg-white transition"
-            />
+          {/* Due Date & Branch Reference */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[11px] font-mono font-medium text-slate-500 uppercase tracking-wider mb-1">
+                Target Due Date
+              </label>
+              <input
+                type="date"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+                className="w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-mono font-medium text-slate-500 uppercase tracking-wider mb-1">
+                Git Branch Ref
+              </label>
+              <div className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-[11px] text-slate-700">
+                <svg className="w-3.5 h-3.5 text-slate-400" viewBox="0 0 16 16" fill="currentColor">
+                  <path fillRule="evenodd" d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V6A2.5 2.5 0 0110 8.5H6a1 1 0 00-1 1v1.128a2.251 2.251 0 11-1.5 0V5.372a2.25 2.25 0 111.5 0v1.836A2.492 2.492 0 016 7h4a1 1 0 001-1v-.628A2.25 2.25 0 019.5 3.25zM4.25 12a.75.75 0 100 1.5.75.75 0 000-1.5zM3.5 3.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0z" />
+                </svg>
+                <span className="truncate">feat/{task.id.slice(0, 6)}</span>
+              </div>
+            </div>
           </div>
 
           {/* Description */}
           <div>
-            <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5">
-              Description
+            <label className="block text-[11px] font-mono font-medium text-slate-500 uppercase tracking-wider mb-1">
+              Specification & Implementation Notes
             </label>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={5}
-              placeholder="Add details, acceptance criteria, or notes..."
-              className="w-full rounded-xl border border-gray-300 px-3.5 py-2.5 text-xs text-gray-900 focus:border-green-600 focus:ring-1 focus:ring-green-600 outline-none transition resize-none leading-relaxed"
+              placeholder="Add technical context, acceptance criteria, or branch notes..."
+              className="w-full rounded-md border border-slate-300 bg-white p-3 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition resize-none leading-relaxed"
             />
+          </div>
+
+          {/* Real-time Activity History Stream for this task */}
+          <div className="border border-slate-200 rounded-lg bg-slate-50/70 p-3 space-y-2">
+            <div className="flex items-center justify-between border-b border-slate-200/80 pb-1.5">
+              <span className="font-mono text-[11px] font-semibold text-slate-700">
+                Audit Trail & Activity
+              </span>
+              <span className="font-mono text-[10px] text-slate-400">
+                {taskActivities.length} events
+              </span>
+            </div>
+
+            {taskActivities.length === 0 ? (
+              <p className="text-[11px] text-slate-400 italic py-1">
+                No recent activity recorded for this task.
+              </p>
+            ) : (
+              <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                {taskActivities.slice(0, 6).map((item) => {
+                  const actor = item.actor_id ? profiles[item.actor_id] : null;
+                  const dateStr = item.created_at
+                    ? (() => {
+                        try {
+                          return format(parseISO(item.created_at), 'MMM dd HH:mm');
+                        } catch {
+                          return item.created_at.slice(11, 16);
+                        }
+                      })()
+                    : '';
+
+                  return (
+                    <div key={item.id} className="flex items-start gap-2 text-[11px] text-slate-600">
+                      <span
+                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[8px] font-bold text-white mt-0.5"
+                        style={{ backgroundColor: actor?.color || '#64748b' }}
+                      >
+                        {actor?.name?.charAt(0).toUpperCase() || 'S'}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <span className="font-semibold text-slate-800 mr-1">
+                          {actor?.name || 'Collaborator'}
+                        </span>
+                        <span>
+                          {item.type === 'task_created' && 'created this task'}
+                          {item.type === 'status_changed' &&
+                            `changed status to ${(item.payload as any)?.to || 'new'}`}
+                          {item.type === 'assignee_changed' && 'reassigned task'}
+                          {item.type === 'due_changed' && 'updated due date'}
+                          {item.type === 'comment_added' && 'added a note'}
+                        </span>
+                        <div className="text-[9px] text-slate-400 font-mono mt-0.5">
+                          {dateStr}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Metadata Strip */}
+          <div className="border border-slate-200 rounded-lg bg-slate-50 p-2.5 text-[10px] font-mono text-slate-500 space-y-1">
+            <div className="flex justify-between">
+              <span>CREATED:</span>
+              <span className="text-slate-700 font-medium">
+                {task.created_at ? task.created_at.slice(0, 19).replace('T', ' ') : '--'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span>LAST_COMMITTED:</span>
+              <span className="text-slate-700 font-medium">
+                {task.updated_at ? task.updated_at.slice(0, 19).replace('T', ' ') : '--'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span>ROW_UUID:</span>
+              <span className="text-slate-600 truncate max-w-[180px]">{task.id}</span>
+            </div>
           </div>
         </div>
 
         {/* Drawer Footer Actions */}
-        <div className="border-t border-gray-200 px-6 py-4 flex items-center justify-end gap-3 bg-gray-50/50">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-xl border border-gray-300 bg-white px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={saving || conn !== 'live'}
-            className="inline-flex items-center gap-2 rounded-xl bg-green-700 px-5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-green-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {saving ? (
-              <>
-                <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                <span>Saving...</span>
-              </>
+        <div className="border-t border-slate-200 px-5 py-3.5 flex items-center justify-between gap-3 bg-white">
+          {/* Left: Archive / Delete */}
+          <div>
+            {confirmArchive ? (
+              <div className="flex items-center gap-1.5 animate-in fade-in duration-150">
+                <button
+                  type="button"
+                  onClick={handleArchive}
+                  disabled={archiving || saving || conn !== 'live'}
+                  className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 transition disabled:opacity-50"
+                >
+                  {archiving ? 'Archiving...' : 'Confirm Archive'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmArchive(false)}
+                  disabled={archiving}
+                  className="rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-600 hover:bg-slate-100 transition"
+                >
+                  Cancel
+                </button>
+              </div>
             ) : (
-              <span>Save changes</span>
+              <button
+                type="button"
+                onClick={() => setConfirmArchive(true)}
+                disabled={archiving || saving || conn !== 'live'}
+                className="text-xs text-rose-600 hover:text-rose-800 hover:underline transition disabled:opacity-50 font-medium"
+              >
+                Archive Task
+              </button>
             )}
-          </button>
+          </div>
+
+          {/* Right: Dismiss & Commit Changes */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition"
+            >
+              Dismiss
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving || archiving || conn !== 'live'}
+              className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition shadow-xs"
+            >
+              {saving ? (
+                <>
+                  <div className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  <span>Committing...</span>
+                </>
+              ) : (
+                <span>Commit Changes</span>
+              )}
+            </button>
+          </div>
         </div>
       </aside>
 
-      {/* Conflict Resolution Modal */}
+      {/* Concurrent Version Conflict Dialog */}
       <ConflictDialog
         isOpen={showConflictDialog}
         localTitle={title}
-        serverTitle={conflictedTask?.title}
+        serverTitle={conflictedTask?.title || activeConflict?.serverTask.title}
+        localVersion={baseVersion}
+        serverVersion={conflictedTask?.version || activeConflict?.serverTask.version}
+        localDescription={description}
+        serverDescription={conflictedTask?.description ?? activeConflict?.serverTask.description}
+        localStatus={status}
+        serverStatus={conflictedTask?.status || activeConflict?.serverTask.status}
         onTakeTheirs={handleTakeTheirs}
         onKeepMine={handleKeepMine}
       />

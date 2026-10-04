@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useSession } from '@/lib/useSession';
 import type { Task, Profile, ConnStatus } from './types';
@@ -20,9 +20,6 @@ export function useDashboardData() {
   const [conn, setConn] = useState<ConnStatus>('connecting');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const tasksRef = useRef<Task[]>([]);
-  tasksRef.current = tasks;
 
   const fetchData = useCallback(async () => {
     try {

@@ -1,20 +1,28 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { useSession } from '@/lib/useSession';
 import { toast } from 'sonner';
 
 const COLORS = ['#6366f1', '#f43f5e', '#10b981', '#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a6'];
 
 export default function LoginPage() {
   const router = useRouter();
+  const { session, loading: sessionLoading } = useSession();
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (session) {
+      router.replace('/dashboard');
+    }
+  }, [session, router]);
 
   function validate() {
     const e: Record<string, string> = {};
@@ -48,12 +56,20 @@ export default function LoginPage() {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
       }
-      router.replace('/projects');
+      router.replace('/dashboard');
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Something went wrong.');
     } finally {
       setLoading(false);
     }
+  }
+
+  if (sessionLoading) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f9fafb' }}>
+        <p style={{ color: '#6b7280', fontSize: 14 }}>Checking session...</p>
+      </div>
+    );
   }
 
   return (

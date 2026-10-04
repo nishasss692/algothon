@@ -78,3 +78,12 @@ export interface PresenceUser {
   color: string;
   task_id: string | null;
 }
+
+export interface ConflictRecord {
+  taskId: string;
+  localVersion: number;
+  serverVersion: number;
+  localPatch: Partial<Task>;
+  serverTask: Task;
+  detectedAt: string;
+}

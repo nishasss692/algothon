@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Task, Activity, Profile, ConnStatus, PresenceUser } from './types';
+import type { Task, Activity, Profile, ConnStatus, PresenceUser, ConflictRecord } from './types';
 
 interface ProjectStore {
   tasks: Record<string, Task>;
@@ -8,6 +8,7 @@ interface ProjectStore {
   online: PresenceUser[];
   typing: Record<string, string>; // task_id -> user name
   conn: ConnStatus;
+  conflicts: Record<string, ConflictRecord>;
 
   upsertTask: (task: Task) => void;
   removeTask: (id: string) => void;
@@ -17,6 +18,8 @@ interface ProjectStore {
   setOnline: (users: PresenceUser[]) => void;
   setTyping: (taskId: string, userName: string | null) => void;
   setConn: (status: ConnStatus) => void;
+  setConflict: (conflict: ConflictRecord) => void;
+  clearConflict: (taskId: string) => void;
   reset: () => void;
 }
 
@@ -27,6 +30,7 @@ const initialState = {
   online: [],
   typing: {},
   conn: 'connecting' as ConnStatus,
+  conflicts: {},
 };
 
 export const useProjectStore = create<ProjectStore>((set) => ({
@@ -101,6 +105,15 @@ export const useProjectStore = create<ProjectStore>((set) => ({
     }),
 
   setConn: (conn) => set({ conn }),
-
+  setConflict: (conflict) =>
+    set((state) => ({
+      conflicts: { ...state.conflicts, [conflict.taskId]: conflict },
+    })),
+  clearConflict: (taskId) =>
+    set((state) => {
+      const rest = { ...state.conflicts };
+      delete rest[taskId];
+      return { conflicts: rest };
+    }),
   reset: () => set(initialState),
 }));
